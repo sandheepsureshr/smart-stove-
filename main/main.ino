@@ -291,5 +291,5 @@ void drawNum(int v,int x,int y){
 
 // ---------- Buzzer ----------
 void beep(int d){
-  tone(BUZZER,3500,d);   // 🔊 louder frequency
+  tone(BUZZER,3500,d);   // 
 }
