@@ -6,6 +6,8 @@
 #include "base64.h"
 
 
+
+
 TFT_eSPI tft;
 Servo gasServo;
 Servo cutServo;
@@ -18,6 +20,8 @@ Servo cutServo;
 #define BTN_OK     27
 #define SERVO_PIN  19
 #define BUZZER     12
+#define BURNER_LED 15
+
 // ---------- GAS SENSOR + EMERGENCY ----------
 #define MQ4_PIN        34      // Analog pin for MQ4
 #define CUT_SERVO_PIN  21     // Second servo for gas cutoff
@@ -81,25 +85,40 @@ bool beepOn = false;
 // ---------- WiFi & Twilio ----------
 
 
-const char* ssid = "";
-const char* password = "";
-const char* accountSid = "#";
-const char* authToken = "#";
-const char* twilioPhoneNumber = "+99999999999999";
-const char* recipientPhoneNumber = "+9199999999999";
+// const char* ssid = "";
+// const char* password = "";
+// const char* accountSid = "#";
+// const char* authToken = "#";
+// const char* twilioPhoneNumber = "+99999999999999";
+// const char* recipientPhoneNumber = "+9199999999999";
 
+
+
+
+    
 
 
 // ---------- Setup ----------
 void setup() {
   Serial.begin(115200);
+  pinMode(BURNER_LED, OUTPUT);
+  digitalWrite(BURNER_LED, LOW);   // OFF initially
   Serial.println("SMART STOVE STARTING...");
+  tft.init();
+  tft.setRotation(0);
+  tft.fillScreen(TFT_BLACK);
   pinMode(MQ4_PIN, INPUT);
 
   cutServo.attach(CUT_SERVO_PIN);
   cutServo.write(0);   // normal open
 
   Serial.print("Connecting to WiFi");
+  // Show WiFi connecting screen
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE);
+  tft.drawCentreString("SMART STOVE", 120, 40, 2);
+  tft.drawCentreString("Connecting WiFi...", 120, 90, 2);
+
 
   WiFi.begin(ssid, password);
 
@@ -116,6 +135,8 @@ void setup() {
 
 
 
+
+
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
   pinMode(BTN_LEFT, INPUT_PULLUP);
@@ -126,19 +147,17 @@ void setup() {
   gasServo.attach(SERVO_PIN);
   gasServo.write(0);
 
-  tft.init();
-  tft.setRotation(0);
-  tft.fillScreen(TFT_BLACK);
+
 
   drawStaticUI();
 }
 
 // ---------- Loop ----------
 void loop() {
-  checkGasLeak();        // 🔴 must be FIRST to detect danger immediately
-  handleEmergencyUI();   // 🔴 handles alarm screen & reset hold
+  checkGasLeak();        // must be FIRST to detect danger immediately
+  handleEmergencyUI();   //  handles alarm screen & reset hold
 
-  if (emergencyMode) return;   // ⛔ stop all normal stove logic in emergency
+  if (emergencyMode) return;   //  stop all normal stove logic in emergency
 
   handleButtons();
   updateTimer();
@@ -443,6 +462,7 @@ void onPress(int id){
   else if(state==RUNNING && id==4){
     state = PAUSED_TIME;
     gasServo.write(0);
+    digitalWrite(BURNER_LED, LOW);
     hh = remainSec / 3600;
     mm = (remainSec % 3600) / 60;
     ss = remainSec % 60;
@@ -483,6 +503,7 @@ void startCooking(){
 void finishCooking(){
   state = FINISHED;
   gasServo.write(0);
+  digitalWrite(BURNER_LED, LOW);
 
   tickFrame = 0;
   tickAnimTimer = millis();
@@ -499,7 +520,12 @@ void updateServo(){
   if(state==RUNNING){
     int a[]={40,90,140};
     gasServo.write(a[flame]);
-  } else gasServo.write(0);
+    digitalWrite(BURNER_LED, HIGH);
+  } 
+  else {
+    gasServo.write(0);
+    digitalWrite(BURNER_LED, LOW);    // 🔴 LED OFF otherwise
+  }
 }
 
 // ---------- Utils ----------
@@ -580,7 +606,7 @@ void checkGasLeak() {
       gasLeakStart = millis();
 
     // Leak for more than 5 seconds
-    if (millis() - gasLeakStart > 5000) {
+    if (millis() - gasLeakStart > 3000) {
       triggerEmergency();
     }
 
@@ -593,11 +619,12 @@ void triggerEmergency() {
   emergencyMode = true;
 
   // Cut gas immediately
+  digitalWrite(BURNER_LED, LOW);
   gasServo.write(0);
   cutServo.write(90);
 
   // Send SMS
-  String emergencyMessage ="gas leaked";
+  String emergencyMessage ="🚨 Emergency Alert! 🚨 Gas leaked";
   sendTwilioSMS(emergencyMessage);
 }
 
@@ -608,8 +635,8 @@ void handleEmergencyUI() {
   // Screen alert
   tft.fillScreen(TFT_RED);
   tft.setTextColor(TFT_WHITE, TFT_RED);
-  tft.drawCentreString("!!! GAS LEAKAGE !!!", 120, 80, 2);
-  tft.drawCentreString("HOLD OK 10s", 120, 120, 2);
+  tft.drawCentreString("!!! GAS LEAKAGE !!!", 120, 70, 4);
+  tft.drawCentreString("HOLD OK 10s To Exit", 120, 120, 2);
 
   // Continuous buzzer
   tone(BUZZER, 2000);
@@ -636,13 +663,41 @@ void handleEmergencyUI() {
 
 
 
+// void sendTwilioSMS(String message) {
+//     WiFiClientSecure client;
+//     client.setInsecure();
+
+//     if (client.connect("api.twilio.com", 443)) {
+//         String auth = base64::encode(accountSid + String(":") + authToken);
+//         String body = "Body=" + message + "&From=" + twilioPhoneNumber + "&To=" + recipientPhoneNumber;
+
+//         client.println("POST /2010-04-01/Accounts/" + String(accountSid) + "/Messages.json HTTP/1.1");
+//         client.println("Host: api.twilio.com");
+//         client.println("Authorization: Basic " + auth);
+//         client.println("Content-Type: application/x-www-form-urlencoded");
+//         client.println("Content-Length: " + String(body.length()));
+//         client.println();
+//         client.println(body);
+
+//         Serial.println(client.readString());  // Debugging
+//     }
+//     //call();
+// }
+
+
+
+
 void sendTwilioSMS(String message) {
     WiFiClientSecure client;
     client.setInsecure();
 
     if (client.connect("api.twilio.com", 443)) {
+
         String auth = base64::encode(accountSid + String(":") + authToken);
-        String body = "Body=" + message + "&From=" + twilioPhoneNumber + "&To=" + recipientPhoneNumber;
+
+        String body = "Body=" + message +
+                      "&From=" + twilioPhoneNumber +
+                      "&To=" + recipientPhoneNumber;
 
         client.println("POST /2010-04-01/Accounts/" + String(accountSid) + "/Messages.json HTTP/1.1");
         client.println("Host: api.twilio.com");
@@ -650,29 +705,30 @@ void sendTwilioSMS(String message) {
         client.println("Content-Type: application/x-www-form-urlencoded");
         client.println("Content-Length: " + String(body.length()));
         client.println();
-        client.println(body);
+        client.println(body);   // 🔥 IMPORTANT: println, not print
+
+        Serial.println(client.readString());
+    }
+    call();
+}
+
+
+void call() {
+    WiFiClientSecure client;
+    client.setInsecure();
+
+    if (client.connect("api.twilio.com", 443)) {
+        String data = "To=" + String(recipientPhoneNumber) + "&From=" + String(twilioPhoneNumber) + "&Url=" + "http://demo.twilio.com/docs/voice.xml";
+        String url = "/2010-04-01/Accounts/" + String(accountSid) + "/Calls.json";
+        String auth = "Basic " + base64::encode(accountSid + String(":") + authToken);
+
+        client.print("POST " + url + " HTTP/1.1\r\n");
+        client.print("Host: api.twilio.com\r\n");
+        client.print("Authorization: " + auth + "\r\n");
+        client.print("Content-Type: application/x-www-form-urlencoded\r\n");
+        client.print("Content-Length: " + String(data.length()) + "\r\n\r\n");
+        client.print(data);
 
         Serial.println(client.readString());  // Debugging
     }
-    //call();
 }
-
-// void call() {
-//     WiFiClientSecure client;
-//     client.setInsecure();
-
-//     if (client.connect("api.twilio.com", 443)) {
-//         String data = "To=" + String(recipientPhoneNumber) + "&From=" + String(twilioPhoneNumber) + "&Url=" + "http://demo.twilio.com/docs/voice.xml";
-//         String url = "/2010-04-01/Accounts/" + String(accountSid) + "/Calls.json";
-//         String auth = "Basic " + base64::encode(accountSid + String(":") + authToken);
-
-//         client.print("POST " + url + " HTTP/1.1\r\n");
-//         client.print("Host: api.twilio.com\r\n");
-//         client.print("Authorization: " + auth + "\r\n");
-//         client.print("Content-Type: application/x-www-form-urlencoded\r\n");
-//         client.print("Content-Length: " + String(data.length()) + "\r\n\r\n");
-//         client.print(data);
-
-//         Serial.println(client.readString());  // Debugging
-//     }
-// }
